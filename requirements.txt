@@ -4,4 +4,11 @@ pydantic
 numpy
 pandas
 catboost
-
+pandas
+sqlalchemy
+scikit-learn
+joblib
+prefect
+pydantic
+fastapi
+holidays
