@@ -1,54 +1,71 @@
-from typing import List, Annotated
-
-import numpy as np
-import uvicorn
-from fastapi import Body, Depends, FastAPI, HTTPException
+from typing import List
+from fastapi import FastAPI, HTTPException, Body, Depends
 from pydantic import BaseModel
-import pickle
 import pandas as pd
+import joblib
 import os
+from datetime import datetime
+import yaml
 
 app = FastAPI()
 
-# Define models and logic for the /predict endpoint
 class PredictRequest(BaseModel):
+    trip_id: str
     request_datetime: str
     trip_distance: float
-    PULocationID: float
-    DOLocationID: float
-    Airport: bool
-
+    PULocationID: int
+    DOLocationID: int
+    Airport: int
 
 class PredictResponse(BaseModel):
     prediction: float
 
-_model = None
+def load_model():
+    model_path = "models/random_forest_regressor_model.joblib"
+    if not os.path.exists(model_path):
+        raise HTTPException(status_code=404, detail="Model file not found")
+    return joblib.load(model_path)
 
-def get_model():
-    return None
-    global _model
-    if _model is None:
-        model_path = "catboost_model.pkl"
-        if not os.path.exists(model_path):
-            raise HTTPException(status_code=404, detail=f"Model '{model_path}' not found")
-        with open(model_path, "rb") as f:
-            _model = pickle.load(f)
-    return _model
+with open('./params.yaml', 'r') as file:
+    params = yaml.safe_load(file)
 
-@app.post("/predict")
-def predict(data: Annotated[PredictRequest, Body()], model=Depends(get_model)) -> PredictResponse:
-    if not data:
-        raise HTTPException(status_code=400, detail="Request body is empty")
-    return PredictResponse(prediction=np.random.randn(len(data)))
+def preprocess_request(data: List[PredictRequest]):
+    df = pd.DataFrame([{
+        "request_datetime": item.request_datetime,
+        "trip_distance": item.trip_distance,
+        "PULocationID": item.PULocationID,
+        "DOLocationID": item.DOLocationID,
+        "Airport": item.Airport
+    } for item in data])
 
-    # prediction = model.predict(pd.DataFrame(
-    #      {"feature1": [o.feature1 for o in data], "feature2": [o.feature2 for o in data]}
-    #  ))
-    # return PredictResponse(prediction=prediction.tolist())
+    df['request_datetime'] = pd.to_datetime(df['request_datetime'])
+    df['request_datetime'] = df['request_datetime'].dt.hour
 
+    df['tpep_dropoff_datetime'] = pd.NaT
 
-def main():
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    df['Airport'] = (df['Airport'] > 0).astype(int)
+
+    feature_columns = [
+        'request_datetime',
+        'trip_distance',
+        'PULocationID',
+        'DOLocationID',
+        'Airport'
+    ]
+    input_df = df[feature_columns]
+    
+    return input_df
+
+@app.post("/predict", response_model=PredictResponse)
+def predict(data: List[PredictRequest] = Body(...)):
+    try:
+        model = load_model()
+        input_df = preprocess_request(data)
+        predictions = model.predict(input_df)
+        return PredictResponse(prediction=predictions[0])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
 if __name__ == '__main__':
-    main()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
